@@ -337,6 +337,34 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         };
     };
 
+    const writeInstanceLabels = async () => {
+        const labels = new Uint8Array(width * height * channels);
+        const labelNames = ['label', 'instance_label'];
+        const labelColumns = labelNames.map(name => dataTable.getColumnByName(name));
+        const labelInfo: Record<string, number> = {}
+        const labelSet: Set<number> = new Set()
+
+        for (let i = 0; i < indices.length; ++i) {
+            dataTable.getRow(indices[i], row, labelColumns);
+            const label = row.label
+            const instance = row.instance_label + 1
+
+            const ti = layout(i);
+
+            if (!(instance in labelSet)){
+                labelInfo[label] = (labelInfo[label] || 0) + 1;
+            }
+
+            labels[ti * 4] = 0xff & label;
+            labels[ti * 4 + 1] = 0xff & instance;
+            labels[ti * 4 + 2] = 0xff & (instance >> 8);
+            labels[ti * 4 + 3] = 0xff;
+            labelSet.add(instance)
+        }
+        await writeWebp('labels.webp', labels);
+        return labelInfo
+    };
+
     const shBands = getSHBands(dataTable);
 
     const writingGroup = openGroup ? logger.group('Writing') : null;
@@ -351,7 +379,8 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
             writeColors(),
             shBands > 0 ? writeSH(shBands) : Promise.resolve(null),
             writeMeans(),
-            writeQuaternions()
+            writeQuaternions(),
+            writeInstanceLabels()
         ] as const;
 
         // when one pipeline fails, Promise.all rejects immediately while the
@@ -359,7 +388,7 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
         // so the original error propagates instead of an unhandled rejection
         pipelines.forEach(p => p.catch(() => {}));
 
-        const [scalesCodebook, colorsCodebook, shN, meansMinMax] = await Promise.all(pipelines);
+        const [scalesCodebook, colorsCodebook, shN, meansMinMax, labelInfo] = await Promise.all(pipelines);
 
         // construct meta.json
         const meta: any = {
@@ -383,6 +412,10 @@ const writeSog = async (options: WriteSogOptions, fs: FileSystem) => {
             quats: {
                 files: ['quats.webp']
             },
+            labels: {
+                info: labelInfo,
+                files: ['labels.webp']
+            } ,
             sh0: {
                 codebook: colorsCodebook,
                 files: ['sh0.webp']
